@@ -20,7 +20,24 @@ public class CodingTestService(AppDbContext db, ILogger<CodingTestService> logge
         //   finally REPORT_END. Each summary line must include PostId|AuthorName|CommentCount|LatestCommentAuthor.
         // - Method must be read-only and efficient for large datasets;
         // Implement the method body in the assessment; do not change the signature.
-        throw new NotImplementedException("Implement GeneratePostSummaryReportAsync according to assessment requirements.");
+        IQueryable<Post> posts = _db.Posts.AsNoTracking().OrderByDescending(p => p.Id);
+        var postsProjection = await posts.Select(p => new
+        {
+            PostId = p.Id,
+            AuthorName = p.Author!.Name,
+            CommentCount = p.Comments.Count,
+            LatestCommentAuthor = p.Comments.OrderByDescending(c => c.CreatedAt).Select(c => c.Author != null ? c.Author.Name : null).FirstOrDefault(),
+        }
+        )
+        .Select(x => $"POST_SUMMARY|{x.PostId}|{x.AuthorName}|{x.CommentCount}|{x.LatestCommentAuthor}")
+        .Take(maxItems)
+        .ToListAsync();
+        if(postsProjection != null && postsProjection.Count >= 0)
+        {
+            postsProjection.Insert(0, "REPORT_START");
+            postsProjection.Add("REPORT_END");
+        }
+        _logger.LogInformation(string.Join("\n", postsProjection!));
     }
 
     public async Task<IList<PostDto>> SearchPostSummariesAsync(string query, int maxResults = 50)
@@ -31,7 +48,20 @@ public class CodingTestService(AppDbContext db, ILogger<CodingTestService> logge
         // - Matching: case-insensitive substring in Title OR Content.
         // - Order by CreatedAt descending, project to PostDto, and avoid materializing full entities.
         // Implement the method body in the assessment; do not change the signature.
-        throw new NotImplementedException("Implement SearchPostSummariesAsync according to assessment requirements.");
+
+        IQueryable<Post> posts = _db.Posts.AsQueryable();
+        // - Treat null/empty/whitespace query as no filter
+        // - Matching: case-insensitive substring in Title OR Content.
+        if (!string.IsNullOrWhiteSpace(query) && query.Length > 0)
+        {
+            posts = posts.Where(p=> EF.Functions.Like(p.Title, $"%{query}%") || EF.Functions.Like(p.Content, $"%{query}%") );
+        }
+        //Projection
+        IQueryable<PostDto> postDtos = posts.Select(p => new PostDto { Id = p.Id, Title = p.Title, AuthorName = ( p.Author != null ? p.Author.Name : null), CreatedAt = p.CreatedAt, CommentCount = p.Comments.Count });
+        //Take maxResults order by CreatedAt desc
+        postDtos = postDtos.OrderByDescending(p => p.CreatedAt).Take(maxResults);
+
+        return await postDtos.ToListAsync();
     }
 
     public async Task<IList<PostDto>> SearchPostSummariesAsync<TKey>(string query, int skip, int take, Expression<Func<PostDto, TKey>> orderBySelector, bool descending)
